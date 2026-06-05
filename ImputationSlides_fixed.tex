@@ -1,0 +1,690 @@
+\documentclass{beamer}
+
+\usetheme{Madrid}
+\usecolortheme{default}
+\usepackage{hyperref}
+
+\title[Missing Data]{Missing Data and Multiple Imputation}
+\subtitle{A Practical Introduction with \texttt{mice}}
+
+\author{Monnie McGee}
+
+\institute{
+REU Site: Advancing Data Science in the Public Interest\\[0.5em]
+Based on examples from\\
+\emph{Flexible Imputation of Missing Data} (2nd ed.)\\
+Stef van Buuren (2018)
+}
+
+\date{}
+\begin{document}
+
+\begin{frame}
+  \titlepage
+\end{frame}
+
+\begin{frame}{Sources and Acknowledgments}
+
+This lesson is adapted from:
+
+\vspace{0.5em}
+
+\textbf{Stef van Buuren (2018)}
+
+\emph{Flexible Imputation of Missing Data}, Second Edition.
+
+\vspace{0.5em}
+
+Online version:
+
+\url{https://stefvanbuuren.name/fimd/}
+
+\vspace{0.5em}
+
+Source code and examples adapted from:
+
+\url{https://github.com/stefvanbuuren/fimdbook}
+
+\vspace{1em}
+
+Examples have been modernized using:
+
+\begin{itemize}
+\item \texttt{mice}
+\item \texttt{naniar}
+\item \texttt{ggplot2}
+\item \texttt{VIM}
+\end{itemize}
+
+\end{frame}
+
+
+
+\begin{frame}{Learning Objectives}
+By the end of this session, you should be able to:
+\begin{itemize}
+  \item Explain why missing data are a statistical problem
+  \item Distinguish MCAR, MAR, and MNAR
+  \item Recognize limitations of ad hoc methods
+  \item Understand the basic idea of multiple imputation
+  \item Use the \texttt{mice} package for a simple analysis
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Why Should We Care About Missing Data?}
+Missing data occur everywhere:
+\begin{itemize}
+  \item Surveys
+  \item Medical studies
+  \item Environmental monitoring
+  \item Business data
+  \item Social science research
+\end{itemize}
+
+\vspace{0.2cm}
+
+Missing data can lead to:
+\begin{itemize}
+  \item Smaller sample sizes
+  \item Biased estimates
+  \item Reduced power
+  \item Incorrect conclusions
+\end{itemize}
+\end{frame}
+
+\begin{frame}{A Simple Example}
+Suppose we observe:
+
+\[
+1,\; 2,\; 4
+\]
+
+\[
+\bar{x} = 2.33
+\]
+
+\vspace{0.4cm}
+
+Now suppose we observe:
+
+\[
+1,\; 2,\; \texttt{NA}
+\]
+
+\vspace{0.3cm}
+
+\begin{center}
+\Large What should the mean be?
+\end{center}
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Mean calculations with missing values}
+
+\vfill
+\end{frame}
+
+\begin{frame}{Complete-Case Analysis}
+Also called \textbf{listwise deletion}.
+
+\vspace{0.3cm}
+
+\textbf{Idea:} remove any row with missing values.
+
+\vspace{0.3cm}
+
+Advantages:
+\begin{itemize}
+  \item Easy
+  \item Built into most software
+\end{itemize}
+
+Disadvantages:
+\begin{itemize}
+  \item Data loss
+  \item Potential bias
+  \item Changing sample sizes across models
+\end{itemize}
+\end{frame}
+
+\begin{frame}[fragile]{Complete-Case Analysis in R}
+\begin{verbatim}
+lm(Ozone ~ Wind, data = airquality)
+
+lm(Ozone ~ Wind + Solar.R, data = airquality)
+\end{verbatim}
+
+\vspace{0.4cm}
+
+Adding a variable can change which rows are included.
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Listwise deletion in \texttt{airquality}}
+
+\vfill
+\end{frame}
+
+\begin{frame}{Types of Missing Data}
+Three missingness mechanisms:
+
+\begin{enumerate}
+  \item MCAR
+  \item MAR
+  \item MNAR
+\end{enumerate}
+
+\vspace{0.4cm}
+
+These mechanisms help determine whether a missing-data method is reasonable.
+\end{frame}
+
+\begin{frame}{MCAR}
+\textbf{Missing Completely At Random}
+
+\vspace{0.3cm}
+
+Missingness is unrelated to:
+\begin{itemize}
+  \item observed values
+  \item unobserved values
+\end{itemize}
+
+\vspace{0.3cm}
+
+Example:
+
+\begin{quote}
+A sensor randomly fails.
+\end{quote}
+
+Observed cases are still representative.
+\end{frame}
+
+\begin{frame}{MAR}
+\textbf{Missing At Random}
+
+\vspace{0.3cm}
+
+Missingness depends on observed variables.
+
+\vspace{0.3cm}
+
+Example:
+
+\begin{quote}
+Older participants are less likely to answer a question, and age is observed.
+\end{quote}
+
+\vspace{0.3cm}
+
+Multiple imputation often works well under MAR.
+\end{frame}
+
+\begin{frame}{MNAR}
+\textbf{Missing Not At Random}
+
+\vspace{0.3cm}
+
+Missingness depends on the missing value itself.
+
+\vspace{0.3cm}
+
+Example:
+
+\begin{quote}
+People with very high income are less likely to report income.
+\end{quote}
+
+\vspace{0.3cm}
+
+This is the hardest case.
+\end{frame}
+
+\begin{frame}{Think-Pair-Share}
+Classify each as MCAR, MAR, or MNAR:
+
+\begin{enumerate}
+  \item A survey website crashes randomly.
+  \item Older respondents skip a question.
+  \item Students with low grades avoid reporting GPA.
+\end{enumerate}
+\end{frame}
+
+\begin{frame}{Why MCAR Matters}
+Pairwise deletion combines statistics from different subsets.
+
+\vspace{0.3cm}
+
+For example:
+\begin{itemize}
+  \item Mean of \texttt{Ozone} may use one set of rows
+  \item Mean of \texttt{Solar.R} may use another set
+  \item Covariance may use yet another set
+\end{itemize}
+
+\vspace{0.3cm}
+This only works well if those subsets are representative.
+
+\vspace{0.3cm}
+That is the MCAR assumption.
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Pairwise deletion and sample sizes}
+
+\vfill
+\end{frame}
+
+\begin{frame}{Common Ad Hoc Methods}
+Common quick fixes:
+
+\begin{itemize}
+  \item Listwise deletion
+  \item Pairwise deletion
+  \item Mean imputation
+  \item Regression imputation
+  \item Last observation carried forward
+\end{itemize}
+
+\vspace{0.3cm}
+They are simple, but often misleading.
+\end{frame}
+
+\begin{frame}{Mean Imputation}
+Replace missing values with the mean.
+
+\[
+x_{\text{missing}} = \bar{x}_{\text{observed}}
+\]
+
+\vspace{0.3cm}
+
+Advantages:
+\begin{itemize}
+\item Easy
+\item Fast
+\item Available in almost every software package
+\end{itemize}
+
+\vspace{0.3cm}
+
+Problems:
+\begin{itemize}
+\item Reduces variance
+\item Distorts distributions
+\item Underestimates uncertainty
+\item Weakens relationships among variables
+\end{itemize}
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Mean Imputation}
+
+\vspace{0.5cm}
+
+Histogram and scatterplot examples
+
+\vfill
+\end{frame}
+
+\begin{frame}{Regression Imputation}
+
+Fit a regression model:
+
+\[
+Y = \beta_0 + \beta_1 X
+\]
+
+Use the fitted model to predict missing values.
+
+\vspace{0.3cm}
+
+Advantages:
+
+\begin{itemize}
+\item Uses relationships among variables
+\item Better than mean imputation
+\end{itemize}
+
+\vspace{0.3cm}
+
+Problem:
+
+Predicted values fall directly on the regression line.
+
+Variability is lost.
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Regression Imputation}
+
+\vfill
+\end{frame}
+
+\begin{frame}{Last Observation Carried Forward (LOCF)}
+
+Idea:
+
+Replace a missing value by the most recent observed value.
+
+\vspace{0.3cm}
+
+Common in longitudinal studies.
+
+\vspace{0.3cm}
+
+Potential problems:
+
+\begin{itemize}
+\item Assumes no change occurred
+\item Can create artificial trends
+\item Often underestimates uncertainty
+\end{itemize}
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large LOCF Example}
+
+\vfill
+\end{frame}
+
+\begin{frame}{Why Ad Hoc Methods Fail}
+
+Common problems:
+
+\begin{itemize}
+\item Loss of information
+\item Biased estimates
+\item Distorted distributions
+\item Incorrect standard errors
+\item Underestimated uncertainty
+\end{itemize}
+
+\vspace{0.5cm}
+
+We need a method that uses available information while acknowledging uncertainty.
+\end{frame}
+
+\begin{frame}{Multiple Imputation}
+
+Core idea:
+
+\vspace{0.3cm}
+
+Instead of filling in one value,
+
+\vspace{0.2cm}
+
+fill in several plausible values.
+
+\vspace{0.5cm}
+
+Create:
+
+\begin{enumerate}
+\item Multiple completed datasets
+\item Separate analyses
+\item Combined results
+\end{enumerate}
+\end{frame}
+
+\begin{frame}[fragile]{The Multiple Imputation Workflow}
+
+\begin{center}
+\includegraphics[scale=.15]{ch01-miflow-1.png}
+\end{center}
+
+\end{frame}
+
+\begin{frame}{What Produces the Imputed Values?}
+
+Multiple imputation is a framework.
+
+\vspace{0.3cm}
+
+An imputation method generates the replacement values.
+
+\vspace{0.3cm}
+
+Examples available in \texttt{mice}:
+
+\begin{itemize}
+\item Predictive mean matching (PMM)
+\item Bayesian regression
+\item Classification and Regression Trees (CART)
+\item Random Forest
+\item Logistic regression
+\end{itemize}
+\end{frame}
+
+\begin{frame}{Predictive Mean Matching (PMM)}
+
+PMM is one of the most popular methods for continuous variables.
+
+\vspace{0.3cm}
+
+Basic idea:
+
+\begin{enumerate}
+\item Predict the missing value.
+\item Find observed cases with similar predictions.
+\item Randomly select one observed value.
+\end{enumerate}
+
+\vspace{0.3cm}
+
+The imputed value is always an observed value from the data.
+\end{frame}
+
+\begin{frame}{PMM Example}
+
+Suppose a student's GPA is missing.
+
+\vspace{0.3cm}
+
+Model prediction:
+
+\[
+3.72
+\]
+
+\vspace{0.3cm}
+
+Closest observed GPAs:
+
+\[
+3.70,\quad 3.80
+\]
+
+\vspace{0.3cm}
+
+PMM randomly selects one of those observed values.
+
+\vspace{0.3cm}
+
+Possible imputation:
+
+\[
+3.70
+\]
+or
+\[
+3.80
+\]
+\end{frame}
+
+\begin{frame}{Why PMM Is Popular}
+
+Advantages:
+
+\begin{itemize}
+\item Preserves realistic values
+\item Preserves distributions
+\item Avoids impossible values
+\item Often performs well in practice
+\end{itemize}
+
+\vspace{0.5cm}
+
+For many continuous variables, PMM is a sensible default.
+\end{frame}
+
+\begin{frame}{Common \texttt{mice} Methods}
+
+\begin{tabular}{ll}
+\textbf{Method} & \textbf{Purpose} \\
+\hline
+\texttt{pmm} & Predictive Mean Matching \\
+\texttt{norm} & Bayesian regression \\
+\texttt{norm.nob} & Stochastic regression \\
+\texttt{norm.predict} & Deterministic regression \\
+\texttt{cart} & Decision trees \\
+\texttt{rf} & Random forest \\
+\texttt{logreg} & Binary variables \\
+\texttt{polyreg} & Multicategory variables \\
+\texttt{polr} & Ordered categories \\
+\end{tabular}
+\end{frame}
+
+\begin{frame}[plain]
+\centering
+\vfill
+{\Huge Quarto Demonstration}
+
+\vspace{0.5cm}
+
+{\Large Using \texttt{mice}}
+
+\vspace{0.5cm}
+
+\texttt{md.pattern()}, \texttt{mice()},
+\texttt{densityplot()}, \texttt{stripplot()}
+
+\vfill
+\end{frame}
+
+\begin{frame}[fragile]{Typical \texttt{mice} Workflow}
+
+\begin{verbatim}
+imp <- mice(
+data,
+method = "pmm",
+m = 20,
+seed = 2026
+)
+
+fit <- with(
+imp,
+lm(y ~ x1 + x2)
+)
+
+pool(fit)
+\end{verbatim}
+\end{frame}
+
+\begin{frame}{What Should You Report?}
+
+When using multiple imputation:
+
+\begin{itemize}
+\item Number of imputations
+\item Imputation method
+\item Variables used in imputation
+\item Analysis model
+\end{itemize}
+
+\vspace{0.5cm}
+
+Transparency is important.
+\end{frame}
+
+\begin{frame}{Key Takeaways}
+
+\begin{enumerate}
+\item Missing data are a statistical problem.
+\item Missingness mechanisms matter.
+\item Ad hoc methods often distort results.
+\item Multiple imputation accounts for uncertainty.
+\item \texttt{mice} provides practical tools for implementation.
+\end{enumerate}
+\end{frame}
+
+
+
+\begin{frame}{Further Reading}
+
+\textbf{Primary Reference}
+
+\vspace{0.5em}
+
+Stef van Buuren (2018)
+
+\emph{Flexible Imputation of Missing Data}, 2nd Edition
+
+\vspace{0.5em}
+
+Book website:
+
+\url{https://stefvanbuuren.name/fimd/}
+
+\vspace{0.5em}
+
+\textbf{R Packages}
+
+\begin{itemize}
+\item \texttt{mice}: \url{https://amices.org/mice/}
+\item \texttt{naniar}: \url{https://naniar.njtierney.com/}
+\item \texttt{VIM}: \url{https://cran.r-project.org/package=VIM}
+\end{itemize}
+
+\end{frame}
+
+\begin{frame}
+\centering
+\Huge Questions?
+\end{frame}
+
+\end{document}
+
+%One suggestion: when you discuss PMM, don't present it as "the best" method. Tell students:
+
+%> PMM is often a good default for continuous variables because it tends to preserve realistic values and is relatively robust.
+
+%That statement is accurate, easy to remember, and avoids getting drawn into debates about Bayesian regression, random forests, or CART during an introductory lesson.
