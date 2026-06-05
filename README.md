@@ -10,3 +10,5 @@ ImputationSlides.tex - Beamer raw code for slides
 
 ImputationIntro.qmd - R quarto file for demonstration 
 
+## Reproducibility and why we care
+Reproducibility2026.pptx - slides for importance of reproducibility
