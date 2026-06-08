@@ -2,7 +2,8 @@
 title: "Multiple Imputation"
 author: "Monnie McGee"
 format: html
-editor: visual
+embed_resources: TRUE
+bibliography: fimd2.bib
 ---
 
 # (PART) Part I: Basics {.unnumbered}
@@ -32,12 +33,15 @@ where `y` is a vector containing three numbers, and where `mean(y)` is the `R` e
 
 ```{r mean2}
 # Retype the vector y with NA instead of 4 in the last position. Recalculate the mean. What happens?
+y1 = c(1, 2, NA)
+mean(y1)
 ```
 
 The mean is now undefined, and `R` informs us about this outcome by setting the mean to `NA`. It is possible to add an extra argument `na.rm = TRUE` to the function call. This removes any missing data before calculating the mean:
 
 ```{r mean3}
 # Set na.rm = TRUE. What happens?
+mean(y1, na.rm = TRUE)
 ```
 
 This makes it possible to calculate a result, but of course the set of observations on which the calculations are based has changed. This may cause problems in statistical inference and interpretation.
@@ -46,43 +50,37 @@ It gets worse with multivariate analysis. For example, let us try to predict dai
 
 ```{r air2, eval = FALSE}
 fit <- lm(Ozone ~ Wind, data = airquality)
+nrow(airquality)
+nobs(fit)
 ```
 
-Many `R` users have seen this message. The code cannot continue because there are missing values. One way to circumvent the problem is to omit any incomplete records by specifying the `na.action = na.omit` argument to `lm()`. The regression weights can now be obtained as
-
-```{r air3}
-# Rerun the linear regression with na.action = na.omit. What happens?
-```
-
-This works. For example, we may produce diagnostic plots by `plot(fit)` to study the quality of the model. In practice, it is cumbersome to supply the `na.action()` function each time. We can change the setting in `options` as
-
-```{r air3b}
-options(na.action = na.omit)
-```
-
-which eliminates the error message once and for all. Users of other software packages like `SPSS`, `SAS` and `Stata` enjoy the “luxury” that this deletion option has already been set for them, so the calculations can progress silently.
+**Why are the number of rows in the data set greater than the number of observations used in the fit?**
 
 Next, we wish to plot the predicted ozone levels against the observed data, so we use `predict()` to calculate the predicted values, and add these to the data to prepare for plotting.
 
-```{r air4, eval = FALSE}
+```{r air3, eval = FALSE}
+fit <- lm(Ozone ~ Wind, data = airquality)
 airquality2 <- cbind(airquality, predict(fit))
 ```
 
-Argg... that doesn’t work either. The error message tells us that the two datasets have a different number of rows. The `airquality` data has 153 rows, whereas there are only 116 predicted values. The problem, of course, is that there are missing data. The `lm()` function dropped any incomplete rows in the data. We find the indices of the first six cases by
+Argg... that doesn’t work! The error message tells us that the two datasets have a different number of rows. The `airquality` data has 153 rows, whereas there are only 116 predicted values. The problem, of course, is that there are missing data. The `lm()` function dropped any incomplete rows in the data. We find the indices of the first six cases by
 
 ```{r air5}
+fit <- lm(Ozone ~ Wind, data = airquality)
 head(na.action(fit))
 ```
 
 The total number of deleted cases is found as
 
 ```{r air6}
+fit <- lm(Ozone ~ Wind, data = airquality)
 naprint(na.action(fit))
 ```
 
 The number of missing values per variable in the data is
 
 ```{r air7}
+fit <- lm(Ozone ~ Wind, data = airquality)
 colSums(is.na(airquality))
 ```
 
@@ -129,6 +127,16 @@ abline(h = pred2,
 (ref:plotair9) Predicted versus measured ozone levels for the observed ( blue circles) and missing values (red lines).
 
 The blue points are all from the complete cases, and the points for the incomplete cases are represented by red lines. Since there are no measured ozone levels in that part of the data, the possible values are indicated by 37 horizontal lines.
+
+### What is the lesson of the figure?
+
+Van Buuren is illustrating a fundamental problem with **regression imputation**. The blue points show the relationship between measured Ozone and predicted ozone for the observed cases. The red horizontal lines show that for the missing cases there is not one obvious correct value. Many ozone values are compatible with the same prediction. The uncertainty is large. Yet regression imputation later replaces each missing value with a **single point prediction**. The next sections criticize **deterministic regression imputation** because it treats uncertain predictions as though they were known exactly.
+
+The dashed line is the 45-degree line ($y = x$). It is simply a visual reference:
+
+$$\text{Predicted Ozone} = \text{Measured Ozone}$$
+
+Points on the dashed line are predicted perfectly. The farther a point is from the line, the larger the prediction error. The figure illustrates an important limitation of regression imputation: a model may provide a reasonable prediction, but there is still substantial uncertainty about the true value. Replacing a missing value with a single predicted value ignores that uncertainty.
 
 Listwise deletion allows the calculations to proceed, but it may introduce additional complexities in interpretation. Let’s try to find a better predictive model by including solar radiation (`Solar.R`) into the model as
 
@@ -241,11 +249,11 @@ cov_complete
 eigen(cov_pair)$values
 ```
 
-The method is simple, and appears to use all available information. Under MCAR, it produces consistent estimates of mean, correlations and covariances [@LITTLE2002 p. 55]. The method has also some shortcomings. First, the estimates can be biased if the data are not MCAR. Further, the covariance and/or correlation matrix may not be positive definite, which is requirement for most multivariate procedures. Problems are generally more severe for highly correlated variables [@LITTLE1992]. It is not clear what sample size should be used for calculating standard errors. Taking the average sample size yields standard errors that are too small[@LITTLE1992]. Also, pairwise deletion requires numerical data that follow an approximate normal distribution, whereas in practice we often have variables of mixed types.
+The method is simple, and appears to use all available information. Under MCAR, it produces consistent estimates of mean, correlations and covariances [@LITTLE2002 p. 55]. The method has also some shortcomings. First, the estimates can be biased if the data are not MCAR. Further, the covariance and/or correlation matrix may not be positive definite, which is requirement for most multivariate procedures. We can check this by checking the Eigen values to see if they are all positive (which they are in this case, but that won't always be true). Problems are generally more severe for highly correlated variables [@LITTLE1992]. It is not clear what sample size should be used for calculating standard errors. Taking the average sample size yields standard errors that are too small[@LITTLE1992]. Also, pairwise deletion requires numerical data that follow an approximate normal distribution, whereas in practice we often have variables of mixed types.
 
 The idea to use all available information is good, but the proper analysis of the pairwise matrix requires sophisticated optimization techniques and special formulas to calculate the standard errors [@VANPRAAG1985; @MARSH1998], which somewhat defeats its utility. Pairwise deletion works best used if the data approximate a multivariate normal distribution, if the correlations between the variables are low, and if the assumption of MCAR is plausible. It is not recommended for other cases.
 
-For the airquality data, pairwise deletion seems OK. The covariance matrix looks reasonable. The problem is that we have no guarantee that it will remain reasonable in other datasets.
+For the airquality data, pairwise deletion seems OK. The covariance matrix looks reasonable (all positive Eigen values). The problem is that we have no guarantee that it will remain reasonable in other datasets.
 
 However, even with a reasonable covariance matrix, there are still issues.
 
@@ -271,7 +279,7 @@ The real conceptual issue with pairwise deletion is that the covariance matrix i
 A quick fix for the missing data is to replace them by the mean. We may use the mode for categorical data. Suppose we want to impute the mean in `Ozone` and `Solar.R` of the `airquality` data. `SPSS`, `SAS` and `Stata` have pre-built functions that substitute the mean. This book uses the `R` package `mice` [@VANBUUREN2011B]. This software is a contributed package that extends the functionality of `R`. Before `mice` can be used, it must be installed. An easy way to do this is to type:
 
 ```{r install, eval = FALSE}
-install.packages("mice")
+#install.packages("mice")
 ```
 
 which searches the Comprehensive R Archive Network (CRAN), and installs the requested package on the local computer. After succesful installation, the `mice` package can be loaded by
@@ -283,6 +291,7 @@ library(mice)
 Imputing the mean in each variable can now be done by
 
 ```{r meanimp}
+library(mice)
 imp <- mice(airquality, method = "mean", m = 1, maxit = 1)
 ```
 
@@ -316,10 +325,40 @@ ggplot(plot_data, aes(x = Solar.R, y = Ozone, color = status)) +
        color = NULL)
 ```
 
-(ref:plotmeanimp) Mean imputation of `Ozone`. Blue indicates the observed data, red indicates the imputed values.
+(@ref:plotmeanimp) Mean imputation of `Ozone`. Blue indicates the observed data, red indicates the imputed values.
 
 ```{r meanimp_mean_sd}
 # Calculate the mean and standard deviation of the complete data and the imputed data. What has happened?
+library(dplyr)
+
+# Summary statistics for observed, imputed-only, and completed Ozone
+
+Yobs <- airquality$Ozone
+Ycomp <- data$Ozone
+
+observed_idx <- !is.na(Yobs)
+imputed_idx <- is.na(Yobs)
+
+summary_table <- data.frame(
+  Group = c("Observed", "Imputed only", "Completed"),
+  n = c(
+    sum(observed_idx),
+    sum(imputed_idx),
+    length(Ycomp)
+  ),
+  Mean = c(
+    mean(Yobs[observed_idx]),
+    mean(Ycomp[imputed_idx]),
+    mean(Ycomp)
+  ),
+  SD = c(
+    sd(Yobs[observed_idx]),
+    sd(Ycomp[imputed_idx]),
+    sd(Ycomp)
+  )
+)
+
+summary_table
 ```
 
 Mean imputation distorts the distribution in several ways. Figure \@ref(fig:plotmeanimp) displays the distribution of `Ozone` after imputation. In the figure on the left, the red bar at the mean stands out. Imputing the mean here actually creates a bimodal distribution. The standard deviation in the imputed data is equal to 28.7, much smaller than from the observed data alone, which is 33. The figure on the right-hand side shows that the relation between `Ozone` and `Solar.R` is distorted because of the imputations. The correlation drops from 0.35 in the blue points to 0.3 in the combined data.
@@ -334,50 +373,84 @@ Suppose that we predict `Ozone` by linear regression from `Solar.R`.
 
 ```{r regimp}
 fit <- lm(Ozone ~ Solar.R, data = airquality)
-pred <- predict(fit, newdata = ic(airquality))
 
+missing_ozone <- is.na(airquality$Ozone) & !is.na(airquality$Solar.R)
+
+pred <- predict(
+  fit,
+  newdata = airquality[missing_ozone, ]
+)
+
+Yimp <- airquality$Ozone
+Yimp[missing_ozone] <- pred
 ```
 
 Now plot the imputed values versus the rest of the data.
 
 ```{r plotregimp, duo = TRUE, echo=FALSE, fig.asp=0.5, fig.cap = '(ref:plotregimp)'}
-# Yobs = original Ozone values
-Yobs <- airquality$Ozone
-
-# Yimp = original Ozone values, with missing Ozone replaced by predicted values
-Yimp <- Yobs
-Yimp[is.na(Yobs)] <- pred
-
 plot_data <- data.frame(
   Ozone = Yimp,
   Solar.R = airquality$Solar.R,
-  status = if_else(is.na(Yobs), "Imputed", "Observed")
-) %>%
-  filter(!is.na(Solar.R))
+  status = ifelse(is.na(airquality$Ozone),
+                  "Imputed", "Observed")
+)
 
-# Histogram: observed vs regression-imputed Ozone
-ggplot(plot_data, aes(x = Ozone, fill = status)) +
-  geom_histogram(binwidth = 10,
-                 alpha = 0.45,
-                 position = "identity",
-                 color = "white") +
-  labs(x = "Ozone (ppb)",
-       y = "Count",
-       fill = NULL)
-
-# Scatterplot: regression-imputed Ozone vs Solar Radiation
-ggplot(plot_data, aes(x = Solar.R, y = Ozone, color = status)) +
+ggplot(plot_data, aes(Solar.R, Ozone, color = status)) +
   geom_point(size = 2, alpha = 0.85) +
-  coord_cartesian(ylim = c(-10, 170)) +
-  labs(x = "Solar Radiation (lang)",
-       y = "Ozone (ppb)",
-       color = NULL)
+  geom_abline(
+    intercept = coef(fit)[1],
+    slope = coef(fit)[2],
+    linetype = "dashed"
+  ) +
+  labs(
+    x = "Solar Radiation (lang)",
+    y = "Ozone (ppb)",
+    color = NULL
+  )
 ```
 
 (ref:plotregimp) Regression imputation: Imputing `Ozone` from the regression line.
 
-```{r regimp_mea_sd}
-# Calculate the mean and SD for the regression imputed values.
+```{r regimp_mean_sd}
+library(dplyr)
+
+# Fit regression using observed cases
+fit <- lm(Ozone ~ Solar.R, data = airquality)
+
+# Rows where Ozone is missing but Solar.R is observed
+missing_rows <- is.na(airquality$Ozone) & !is.na(airquality$Solar.R)
+
+# Predicted values for missing Ozone observations
+pred <- predict(
+  fit,
+  newdata = airquality[missing_rows, ]
+)
+
+# Original Ozone values
+Yobs <- airquality$Ozone
+
+# Completed dataset after regression imputation
+Yimp <- Yobs
+Yimp[missing_rows] <- pred
+
+# Summary statistics
+Yobs_only <- Yobs[!is.na(Yobs)]
+Yimp_only <- pred
+Ycomp <- Yimp
+
+data.frame(
+  Group = c("Observed", "Imputed only", "Completed"),
+  Mean = c(
+    mean(Yobs_only),
+    mean(Yimp_only),
+    mean(Ycomp, na.rm = TRUE)
+  ),
+  SD = c(
+    sd(Yobs_only),
+    sd(Yimp_only),
+    sd(Ycomp, na.rm = TRUE)
+  )
+)
 ```
 
 ### Another way to perform regression imputation {#sec:miceregimp}
@@ -440,6 +513,8 @@ ggplot(plot_data, aes(x = Solar.R, y = Ozone, color = status)) +
 (ref:plotsri) Stochastic regression imputation of `Ozone`.
 
 The `method = norm.nob` argument requests a plain, non-Bayesian, stochastic regression method. This method first estimates the intercept, slope and residual variance under the linear model, then calculates the predicted value for each missing value, and adds a random draw from the residual to the prediction. We will come back to the details in Section \@ref(sec:linearnormal). The `seed` argument makes the solution reproducible. Figure \@ref(fig:plotsri) shows that the addition of noise to the predictions opens up the distribution of the imputed values, as intended.
+
+Deterministic regression imputation places all imputed values exactly on the regression line and therefore understates variability. Stochastic regression imputation adds random residual variation so that imputed values resemble real observations more closely.
 
 Note that some new complexities arise. There is one imputation with a negative value. Such values need not be due to the draws from the residual distribution, but can also be a consequence of the use of a linear model for non-negative data. In fact, Figure \@ref(fig:plotair9) shows several negative predicted values in the observed data. Since negative `Ozone` concentrations do not exist in the real world, we cannot consider negative values as plausible imputations. Note also that the high end of the distribution is not well covered. The observed data form a cone, i.e., the data are heteroscedastic, but the imputation model assumes equal dispersion around the regression line. The variability of `Ozone` increases up to the solar radiation level of 250 langleys, and decreases after that. Though it is unclear whether this is a genuine meteorological phenomenon, the imputation model does not account for this feature.
 
@@ -506,6 +581,7 @@ imp <- mice(airquality, method = "mean", m = 1,
 airquality2 <- cbind(complete(imp),
                      r.Ozone = is.na(airquality[, "Ozone"]))
 fit <- lm(Wind ~ Ozone + r.Ozone, data = airquality2)
+fit
 ```
 
 Observe that since the missing data are in `Ozone` we needed to reverse the direction of the regression model.
@@ -549,7 +625,7 @@ Listwise deletion produces standard errors that are correct for the subset of co
 Multiple imputation creates $m>1$ complete datasets. Each of these datasets is analyzed by standard analysis software. The $m$ results are pooled into a final point estimate plus standard error by pooling rules (“Rubin’s rules”). Figure \@ref(fig:miflow) illustrates the three main steps in multiple imputation: imputation, analysis and pooling.
 
 ```{r miflow, echo = FALSE, fig.cap = '(ref:miflow)', out.width='80%'}
-knitr::include_graphics("fig/ch01-miflow-1.png")
+knitr::include_graphics("ch01-miflow-1.png")
 ```
 
 (ref:miflow) Scheme of main steps in multiple imputation.
@@ -624,23 +700,31 @@ Your turn: Pick another completed data set (change complete(imp, 1) to complete(
 
 ```{r air10, echo=FALSE,fig.asp = 0.556, solo=TRUE, fig.cap = '(ref:air10)'}
 Oz <- airquality$Ozone
-colvec <- ifelse(is.na(Oz),mdc(2),mdc(1))
+col_vec <- c("red", "blue", "darkgreen", "purple", "orange")
 
-plot(Oz[1:80],col=mdc(1),type="l",xlab="Day number",ylab="Ozone (ppb)",
+plot(Oz,col="black",type="l",xlab="Day number",ylab="Ozone (ppb)",
      axes = FALSE,lwd = lwd)
-points(Oz[1:80],col=mdc(1),pch=20)
 lwd <- 0.6
 axis(1, lwd = lwd)
 axis(2, lwd = lwd, las = 1)
 box(lwd = lwd)
 
-idx <- ici(airquality$Ozone) & (1:153)<81
-x   <- (1:153)[idx]
-points(x=x,y=complete(imp,1)$Ozone[idx],col=mdc(2),lwd=lwd,pch=20,cex=1)
-points(x=x,y=complete(imp,2)$Ozone[idx],col=mdc(2),lwd=lwd,pch=20,cex=1)
-points(x=x,y=complete(imp,3)$Ozone[idx],col=mdc(2),lwd=lwd,pch=20,cex=1)
-points(x=x,y=complete(imp,4)$Ozone[idx],col=mdc(2),lwd=lwd,pch=20,cex=1)
-points(x=x,y=complete(imp,5)$Ozone[idx],col=mdc(2),lwd=lwd,pch=20,cex=1)
+for(i in 1:5) {
+  points(Oz,
+    y = complete(imp, i)$Ozone,
+    col = col_vec[i],
+    pch = 20,
+    cex = 1.2
+  )
+}
+
+legend(
+  "topleft",
+  legend = paste("Imputation", 1:5),
+  col = col_vec,
+  pch = 20,
+  bty = "n"
+)
 ```
 
 (ref:air10) Multiple imputation of `Ozone`. Plotted are the observed values (in blue) and the multiply imputed values (in red).
@@ -800,3 +884,5 @@ there is a slight curvature in the average of the residuals.
    drawing new imputations?
 
 ```
+
+# References
