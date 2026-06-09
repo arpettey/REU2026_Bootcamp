@@ -1,0 +1,211 @@
+---
+title: "Topic Modeling for Text Data: R Code"
+author: "Monnie McGee"
+date: "June 9, 2026"
+output: html_document
+embed_resources: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, eval = TRUE, message = FALSE, warning = FALSE)
+```
+
+This R Markdown file contains the R code extracted from the Beamer lecture slides on Topic Modeling. Chunks are set to `eval = FALSE` by default so the document can knit even before the needed data objects are created. Change `eval = TRUE` for chunks you want to run.
+
+## R Exercise: Tokenize Text
+
+```{r 01-r-exercise-tokenize-text}
+library(tidyverse)
+library(tidytext)
+library(reshape2)
+
+documents <- read.csv("AbstractExample.csv")
+
+# documents: data frame with columns id and text
+tokens <- documents %>%
+  unnest_tokens(word, text) %>%
+  anti_join(stop_words, by = "word")
+
+word_counts <- tokens %>%
+  count(id, word, sort = TRUE)
+
+dtm <- word_counts %>%
+  cast_dtm(document = id,
+           term = word,
+           value = n)
+```
+
+## Fit LDA in R
+
+```{r 02-fit-lda-in-r}
+library(topicmodels)
+
+# Fit a topic model with 5 topics
+lda_fit <- LDA(dtm, k = 5, control = list(seed = 1234))
+
+# Display the 10 most probable words for each topic
+terms(lda_fit, 10)
+```
+
+## Visualize Top Words by Topic
+
+```{r 03-visualize-top-words-by-topic}
+beta <- tidy(lda_fit, matrix = "beta")
+
+beta %>%
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  ungroup() %>%
+  ggplot(aes(beta, reorder_within(term, beta, topic))) +
+  geom_col() +
+  facet_wrap(~ topic, scales = "free") +
+  scale_y_reordered()
+
+top_terms <- beta  %>% 
+  group_by(topic) %>%
+  slice_max(beta, n = 10) %>%
+  arrange(topic, desc(beta))
+
+top_terms
+```
+
+What would you name the topics?
+
+Most representative documents
+```{r lda_rep}
+
+# Document-topic probabilities
+gamma <- tidy(lda_fit, matrix = "gamma")
+gamma
+
+# By each topic
+gamma %>%
+  group_by(topic) %>%
+  slice_max(gamma, n = 1)
+```
+
+
+```{r Choosing K for LDA}
+# Compare several values of K
+
+lda3 <- LDA(dtm, k = 3, control = list(seed = 1234))
+lda5 <- LDA(dtm, k = 5, control = list(seed = 1234))
+
+terms(lda3, 10)
+terms(lda5, 10)
+
+## Or perplexity - lower is better
+k_values <- 2:5
+
+perplexities <- sapply(k_values, function(k) {
+  fit <- LDA(
+    dtm,
+    k = k,
+    control = list(seed = 1234)
+  )
+  perplexity(fit)
+})
+
+plot(
+  k_values,
+  perplexities,
+  type = "b",
+  xlab = "Number of Topics (K)",
+  ylab = "Perplexity"
+)
+```
+
+Perplexity measures how well the model predicts unseen words; lower values indicate better predictive performance, but not necessarily more interpretable topics. Perplexity plays a role similar to $R^2$ in regression. It measures how well the model explains or predicts the observed data. However, just as $R^2$ tends to increase when we add more predictors, perplexity tends to decrease when we add more topics.
+
+## Fit an STM in R
+
+LDA ignores meta data on the text (covariates). Structural Topic Modeling is an advancement on LDA that is meant to remedy that problem.
+
+```{r 04-fit-an-stm-in-r}
+library(readr)
+library(stm)
+
+abstracts <- read_csv("AbstractExample.csv")
+
+# Add document metadata (I made this up)
+abstracts$field <- c(
+  "policy", "health",
+  "environment", "health",
+  "environment", "policy",
+  "statistics",
+  "environment"
+)
+
+# Add made up metadata to abstracts
+processed <- textProcessor(
+  documents = abstracts$text,
+  metadata  = abstracts
+)
+
+# Create one object with everything in it. Work from this.
+out <- prepDocuments(
+  processed$documents,
+  processed$vocab,
+  processed$meta
+)
+
+
+stm_fit <- stm(
+  documents = out$documents,
+  vocab = out$vocab,
+  K = 5,
+  prevalence = ~ field,
+  data = out$meta,
+  seed = 1234
+)
+```
+
+`searchK()` does more than fit models. It also tries to compute diagnostics such as held-out likelihood. With only a small number of short documents, the held-out step can fail. Here is the code, but we won't use it for our toy example.
+
+```{r Choosing K for STM} 
+#stm_k_results <- searchK(
+#  documents = out$documents,
+#  vocab = out$vocab,
+#  K = c(3, 5),
+#  prevalence = ~ field,
+#  data = out$meta,
+#  seed = 1234
+#)
+
+#plot(stm_k_results)
+```
+
+## Get topics
+```{r stm_topics}
+stm_topics <- labelTopics(stm_fit)
+stm_topics
+
+# Topic proportions
+topicCorr(stm_fit)
+colMeans(stm_fit$theta)
+
+# Most representative documents
+top_doc <- order(stm_fit$theta[,1],
+                 decreasing = TRUE)[1:5]
+
+top_doc
+abstracts$text[top_doc]
+```
+
+What would you name the topics?
+
+## Estimate Effects of Metadata
+
+How do the topics change as a function of the model covariates? STM allows a regression-like model where the response variable is topic prevalence and the predictor is document metadata.
+
+```{r 05-estimate-effects-of-metadata}
+
+effects <- estimateEffect(
+  1:5 ~ field,
+  stm_fit,
+  meta = out$meta
+)
+
+summary(effects)
+plot(effects, covariate = "field", topics = c(1, 2, 3))
+```

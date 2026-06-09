@@ -20,5 +20,6 @@ Reproducibility2026.pptx - slides for importance of reproducibility. References 
 - AbstractsExample.csv: simple set of text for manual topic modeling
 - nsf_abstracts.csv: abstracts from NSF proposals scraped using the code in NSF_Abstracts_Collection.R
 - NSF_Mini_Project.R: R code for creating potential covariates for use with the NSF data.
-
-Content slides coming soon
+- reu_topic_modeling_code.Rmd: R Markdown file with code for LDA and STM
+- reu_topic_modeling.tex: raw latex code for slides
+- reu_topic_modeling.pdf: Compiled PDF of slides
