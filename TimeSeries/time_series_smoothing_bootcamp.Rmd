@@ -1,0 +1,896 @@
+---
+title: "Time Series Bootcamp"
+subtitle: "Exponential Smoothing, Forecasting Workflow, and a Few Useful Tools"
+author: "Monnie McGee"
+date: "June 10, 2026"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    toc_depth: 3
+    theme: flatly
+    highlight: tango
+    code_folding: show
+embed_resources: TRUE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo       = TRUE,
+  message    = FALSE,
+  warning    = FALSE,
+  fig.width  = 8,
+  fig.height = 5
+)
+```
+
+## Setup
+
+Install these packages once if you haven't already (remove comment character to install!):
+
+```{r install, eval=FALSE}
+# install.packages("fpp3")
+# install.packages("broom")
+```
+
+Load them for this workshop:
+
+```{r load}
+library(fpp3)
+library(broom)
+```
+
+**Primary reference:** Hyndman, R.J. & Athanasopoulos, G. (2021),
+*Forecasting: Principles and Practice* (3rd ed.).
+<https://otexts.com/fpp3/>
+
+---
+
+## Time Series
+```{r notrend}
+set.seed(123)
+
+n <- 200
+y <- numeric(n)
+
+for(t in 2:n){
+  y[t] <- 0.8 * y[t-1] + rnorm(1)
+}
+
+time <- 1:n
+plot(time, y, type = "l",
+     xlab = "Time", ylab = "y")
+
+fit_lm <- lm(y ~ time)
+summary(fit_lm)
+```
+
+The true process has no linear trend. It has long runs above and below zero.
+
+```{r residuals}
+plot(residuals(fit_lm), type = "l",
+     xlab = "Time", ylab = "Residual")
+```
+
+- Do the residuals look independent?
+- Are there clusters of positive and negative residuals?
+
+We pull two publicly available, continuously updated series directly from their
+authoritative sources:
+
+* **Temperature anomalies** — NASA GISS Surface Temperature Analysis (GISTEMP v4),
+  global land-ocean index, annual means, baseline 1951–1980. Updated monthly.
+  <https://data.giss.nasa.gov/gistemp/>
+
+* **Atmospheric CO₂** — NOAA Global Monitoring Laboratory, Mauna Loa Observatory,
+  annual means (Keeling Curve), 1959–present.
+  <https://gml.noaa.gov/ccgg/trends/data.html>
+
+```{r climate-load, message=FALSE}
+library(tidyverse)
+
+# ── 1. NASA GISTEMP v4: global annual mean temperature anomalies ──────────────
+# Columns: Year, Jan, Feb, ..., Dec, J-D (annual mean), D-N, DJF, MAM, JJA, SON
+# Header rows are marked with commas; skip=2 lands on the data.
+# The "J-D" column is the calendar-year annual mean (°C relative to 1951–1980).
+
+gistemp_raw <- read_csv(
+  "https://data.giss.nasa.gov/gistemp/tabledata_v4/GLB.Ts+dSST.csv",
+  skip    = 1,          # skip the first descriptor line
+  na      = c("****", "***", "")
+)
+
+temp_df <- gistemp_raw |>
+  rename(year = Year, temp_anomaly = `J-D`) |>
+  select(year, temp_anomaly) |>
+  filter(!is.na(temp_anomaly))
+
+# ── 2. NOAA GML: Mauna Loa annual mean CO₂ (ppm) ────────────────────────────
+# Comment lines begin with #; two data columns: year, mean, unc
+co2_raw <- read_csv(
+  "https://gml.noaa.gov/webdata/ccgg/trends/co2/co2_annmean_mlo.csv",
+  comment = "#",
+  col_names = c("year", "co2_ppm", "uncertainty")
+  ) |>
+  mutate(year = as.integer(year),
+         co2_ppm = as.numeric(co2_ppm))
+
+# ── 3. Join on overlapping years (coerce year to integer on both sides to be safe)
+temp_df <- temp_df |> mutate(year = as.integer(year))
+climate_df <- inner_join(temp_df, co2_raw |> select(year, co2_ppm), by = "year")
+
+glimpse(climate_df)
+```
+
+### Time-series plots
+
+```{r climate-plots, fig.height=4}
+#pdf(file="climatePlots.pdf",width=5,height=3)
+par(mfrow = c(1, 2))
+
+plot(climate_df$year, climate_df$temp_anomaly,
+     type = "l", col = "#1F4E79", lwd = 2,
+     xlab = "Year", ylab = "Temperature anomaly (°C)",
+     main = "Global mean temperature anomaly\n(NASA GISTEMP v4, baseline 1951–1980)")
+abline(h = 0, lty = 2, col = "gray50")
+
+plot(climate_df$year, climate_df$co2_ppm,
+     type = "l", col = "#D95F02", lwd = 2,
+     xlab = "Year", ylab = expression(CO[2]~(ppm)),
+     main = expression("Atmospheric "~CO[2]*", Mauna Loa\n(NOAA GML, annual mean)"))
+#dev.off()
+par(mfrow = c(1, 1))
+```
+
+Both series trend upward over time. Because they share a common trend, a regression of temperature on CO₂ will look impressive on the surface — but the residuals will tell a different story.
+
+### Fitting the regression
+
+```{r climate-lm}
+fit_climate <- lm(temp_anomaly ~ co2_ppm, data = climate_df)
+summary(fit_climate)
+```
+
+The $R^2$ is high and the coefficient on CO₂ is highly significant. This looks like a strong result — but we need to check the residuals.
+
+### Residual diagnostics: the autocorrelation problem
+
+```{r climate-residuals}
+pdf(file="climateResids.pdf", height=3, width=5)
+par(mfrow = c(1, 2))
+
+plot(climate_df$year, residuals(fit_climate),
+     type = "l", col = "#1F4E79", lwd = 2,
+     xlab = "Year", ylab = "Residual",
+     main = "OLS residuals over time")
+abline(h = 0, lty = 2, col = "gray50")
+
+acf(residuals(fit_climate),
+    main = "ACF of OLS residuals")
+dev.off()
+par(mfrow = c(1, 1))
+```
+
+**What to notice:**
+
+* The residual plot is not random noise — it has a clear wave-like structure indicating that consecutive residuals are related (positive autocorrelation).
+* The ACF confirms this: several lags are well outside the confidence bands.
+* This violates the OLS independence assumption, so standard errors and p-values are unreliable — even though the regression *appears* to fit well.
+
+### Why this matters 
+
+```{r climate-dwtest, message=FALSE}
+# A formal test for first-order autocorrelation in residuals
+library(lmtest)
+dwtest(fit_climate)
+```
+
+The Durbin-Watson statistic near 0 (versus the null of 2) confirms strong positive autocorrelation. Key takeaway: a high $R^2$ and a significant coefficient are not sufficient. You must inspect the residuals over time.
+
+## Features of Time Series
+
+```{r tsFeatures}
+library(fpp3)
+library(patchwork)   # combine ggplots into one figure
+
+# ── Trend: Australian GDP 1960–2017 ──────────────────────────────────────────
+aus_gdp <- global_economy |>
+  filter(Country == "Australia") |>
+  select(Year, GDP)
+
+p_trend <- aus_gdp |>
+  autoplot(GDP / 1e12, color = "#1F4E79") +
+  labs(
+    title    = "Trend",
+    subtitle = "Australian GDP (World Bank)",
+    x        = NULL,
+    y        = "GDP (trillions USD)"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", color = "#1F4E79"))
+
+# ── Seasonality: quarterly Australian beer production ────────────────────────
+beer <- aus_production |>
+  filter_index("1992 Q1" ~ "2010 Q4") |>
+  select(Quarter, Beer)
+
+p_seasonal <- beer |>
+  autoplot(Beer, color = "#D95F02") +
+  labs(
+    title    = "Seasonality",
+    subtitle = "Australian quarterly beer production (ABS)",
+    x        = NULL,
+    y        = "Megalitres"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", color = "#D95F02"))
+
+# ── Cycles: annual lynx pelt trading by Hudson's Bay Company ─────────────────
+# pelt is in the tsibbledata package (loaded with fpp3)
+p_cycle <- pelt |>
+  autoplot(Lynx, color = "#7B2D8B") +
+  labs(
+    title    = "Cycles",
+    subtitle = "Annual lynx pelts traded (Hudson's Bay Co., 1845–1935)",
+    x        = NULL,
+    y        = "Number of pelts"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", color = "#7B2D8B"))
+
+# ── Noise: simulated Gaussian white noise ────────────────────────────────────
+set.seed(2026)
+noise_ts <- tsibble(
+  t     = 1:120,
+  value = rnorm(120),
+  index = t
+)
+
+p_noise <- noise_ts |>
+  autoplot(value, color = "#2ca02c") +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "gray50") +
+  labs(
+    title    = "Noise",
+    subtitle = "Simulated Gaussian white noise, N(0, 1)",
+    x        = NULL,
+    y        = "Value"
+  ) +
+  theme_minimal() +
+  theme(plot.title = element_text(face = "bold", color = "#2ca02c"))
+```
+
+```{r four-features-plot, fig.height=8, fig.width=11}
+(p_trend | p_seasonal) / (p_cycle | p_noise)
+```
+
+### The Four Features
+
+**Trend (top left).** Australian GDP rises almost monotonically from 1960 onward.
+There is no seasonal wiggle because GDP is measured annually. The long-run direction
+dominates everything else.
+
+**Seasonality (top right).** Beer production spikes every Q4 (October–December),
+which is Australian summer. The pattern repeats at exactly the same calendar period
+every year — that fixed, calendar-locked periodicity is what distinguishes
+seasonality from cycles.
+
+**Cycles (bottom left).** Lynx pelt counts oscillate roughly every 9–11 years,
+driven by the hare-lynx predator-prey dynamic. Unlike seasonal patterns, cycles do not have a fixed frequency — the period and amplitude vary from one cycle to the next, and they are not locked to the calendar. 
+
+**Noise (bottom right).** By construction there is no pattern here. Each value is an independent draw from $N(0,1)$. After a good model is fit to a real series, the residuals should look like this panel.
+
+### Confirming noise with an ACF
+
+A quick way to demonstrate that the white-noise panel has no structure is to check its autocorrelation function (ACF). All spikes should fall within the blue confidence bands.
+
+```{r four-features-acf, fig.height=3.5}
+noise_ts |>
+  ACF(value) |>
+  autoplot() +
+  labs(
+    title    = "ACF of white noise — no significant autocorrelation",
+    subtitle = "All spikes should fall inside the dashed bands"
+  ) +
+  theme_minimal()
+```
+
+Compare this to the ACF of the beer series, which has strong spikes at lags 4, 8, 12, etc. This is the signature of quarterly seasonality:
+
+```{r four-features-beer-acf, fig.height=3.5}
+beer |>
+  ACF(Beer) |>
+  autoplot() +
+  labs(
+    title    = "ACF of beer production — strong seasonal autocorrelation",
+    subtitle = "Spikes at multiples of lag 4 confirm a quarterly pattern"
+  ) +
+  theme_minimal()
+```
+
+## Forecasting
+```{r forecastingByHand}
+recent_beer <- aus_production |>
+  filter(year(Quarter) >= 1992)
+
+train <- recent_beer |>
+  filter(year(Quarter) <= 2007)
+
+test <- recent_beer |>
+  filter(year(Quarter) > 2007)
+
+train |>
+  autoplot(Beer) +
+  autolayer(test, Beer, color = "gray") +
+  labs(title = "Hide the future first")
+```
+
+## Exponential Smoothing
+
+### Motivating the idea: should old data count as much as newer data?
+
+A naive approach is the historical average:
+
+$$\hat{y}_{t+1} = \frac{y_1 + y_2 + \cdots + y_t}{t}$$
+
+For temperature or many economic series, an observation from three years ago probably should not count as much as yesterday's. This motivates giving more weight to recent
+observations, which is the key idea behind exponential smoothing.
+
+### Exponentially weighted averages
+
+Exponential smoothing weights observations so that importance decays geometrically with age:
+
+$$\hat{y}_{t+1} = \alpha y_t + \alpha(1-\alpha)y_{t-1} + \alpha(1-\alpha)^2 y_{t-2} + \cdots$$
+
+The recursive (state-space) form makes this tractable to compute:
+
+$$\ell_t = \alpha y_t + (1 - \alpha)\ell_{t-1}$$
+
+Here $\ell_t$ is the estimated **level** at time $t$. In plain language:
+
+> New estimate = weighted average of what we just observed and what we previously
+> believed.
+
+The smoothing parameter $\alpha \in (0, 1)$ controls the tradeoff:
+
+| Value of $\alpha$ | Behavior | Interpretation |
+|---|---|---|
+| Small (~0.1) | Very smooth | Slow to adapt |
+| Medium (~0.5) | Balanced | Moderate adaptation |
+| Large (~0.9) | Wiggly | Responds quickly |
+
+### Manual demonstration of $\alpha$
+
+We write the recursive update by hand so we can compare three smoothers side-by-side.
+
+```{r ses-function}
+ses_level <- function(y, alpha) {
+  level    <- numeric(length(y))
+  level[1] <- y[1]
+
+  for (t in 2:length(y)) {
+    level[t] <- alpha * y[t] + (1 - alpha) * level[t - 1]
+  }
+
+  level
+}
+```
+
+Subset Australian beer production to a clean 16-year window:
+
+```{r beer-data}
+beer <- aus_production |>
+  filter_index("1990 Q1" ~ "2005 Q4") |>
+  select(Quarter, Beer)
+
+beer
+```
+
+### Plot three smoothers
+
+Apply $\alpha \in \{0.10, 0.50, 0.90\}$ and compare visually:
+
+```{r beer-smooth-plot}
+beer_smooth <- beer |>
+  mutate(
+    alpha_10 = ses_level(Beer, 0.10),
+    alpha_50 = ses_level(Beer, 0.50),
+    alpha_90 = ses_level(Beer, 0.90)
+  )
+
+# Nicer labels for the legend
+alpha_labels <- c(
+  alpha_10 = "\u03b1 = 0.10 (slow)",
+  alpha_50 = "\u03b1 = 0.50 (balanced)",
+  alpha_90 = "\u03b1 = 0.90 (fast)"
+)
+
+beer_smooth |>
+  pivot_longer(alpha_10:alpha_90,
+               names_to  = "alpha",
+               values_to = "smooth") |>
+  ggplot(aes(x = Quarter)) +
+  geom_line(aes(y = Beer), color = "gray60", linewidth = 0.8) +
+  geom_line(aes(y = smooth, color = alpha), linewidth = 1) +
+  scale_color_manual(values = c("#1F4E79", "#D95F02", "#2ca02c"),
+                     labels  = alpha_labels) +
+  labs(
+    y     = "Beer production (megalitres)",
+    color = "Smoother",
+    title = "Australian beer production with three exponential smoothers"
+  ) +
+  theme_minimal()
+```
+
+**Discussion:** Notice that $\alpha = 0.10$ traces the overall trend almost like a horizontal average, while $\alpha = 0.90$ tracks the quarterly spikes closely.
+
+### Fit exponential smoothing with fpp3
+
+`ETS()` automatically selects the best combination of **E**rror, **T**rend, and
+**S**easonality components. Let R choose:
+
+```{r fit-ets}
+fit_ets <- beer |>
+  model(ETS(Beer))
+
+report(fit_ets)
+```
+
+The `report()` output shows which ETS variant was selected (e.g. `ETS(M,N,A)` means multiplicative error, no trend, additive seasonality) along with the estimated parameters and information criteria.
+
+### Forecast with exponential smoothing
+
+```{r fc-ets}
+fc_ets <- fit_ets |>
+  forecast(h = "2 years")
+
+fc_ets |>
+  autoplot(beer) +
+  labs(
+    y     = "Beer production (megalitres)",
+    title = "ETS forecast: Australian beer production"
+  ) +
+  theme_minimal()
+```
+
+The shaded bands are 80 % and 95 % prediction intervals. Notice that the intervals widen as the forecast horizon grows because uncertainty accumulates over time.
+
+### Trend and seasonality extensions
+
+| Pattern in the data | Common method |
+|---|---|
+| No trend, no seasonality | Simple exponential smoothing (SES) |
+| Trend only | Holt's linear method |
+| Trend + seasonality | Holt-Winters method |
+
+Exponential smoothing is a *family* of models. `ETS()` picks the right family member automatically, but you can also specify one explicitly:
+
+```{r ets-manual, eval=FALSE}
+# Force additive Holt-Winters (trend + additive seasonality)
+beer |>
+  model(ETS(Beer ~ error("A") + trend("A") + season("A"))) |>
+  report()
+```
+
+---
+
+## Another method: Autoregressive Integrated Moving Averages (ARIMA)
+
+### Autoregression
+
+An AR(1) model predicts the next value from the previous one:
+
+$$Y_t = \phi Y_{t-1} + \varepsilon_t$$
+
+The contrast with exponential smoothing: ETS smooths past observations; AR models
+explicitly parametrize *dependence* on lagged values.
+
+### What ARIMA combines
+
+ARIMA(p, d, q) packages three ideas:
+
+* **AR(p):** autoregression — use the last $p$ values
+* **I(d):** integration — difference $d$ times to remove trend 
+* **MA(q):** moving-average errors — use the last $q$ shocks
+
+For this bootcamp, the goal is not to explain every parameter but to demonstrate the workflow.
+
+### A minimal ARIMA example
+
+```{r fit-arima}
+fit_arima <- beer |>
+  model(ARIMA(Beer))
+
+report(fit_arima)
+```
+
+```{r fc-arima}
+fit_arima |>
+  forecast(h = "2 years") |>
+  autoplot(beer) +
+  labs(
+    y     = "Beer production (megalitres)",
+    title = "ARIMA forecast: Australian beer production"
+  ) +
+  theme_minimal()
+```
+
+### Compare ETS and ARIMA side-by-side
+
+A quick way to compare both models at once using `fpp3`'s multi-model syntax:
+
+```{r compare-models}
+fit_both <- beer |>
+  model(
+    ETS   = ETS(Beer),
+    ARIMA = ARIMA(Beer)
+  )
+
+fc_both <- fit_both |>
+  forecast(h = "2 years")
+
+fc_both |>
+  autoplot(beer, level = NULL) +   # level = NULL drops prediction intervals for clarity
+  labs(
+    y     = "Beer production (megalitres)",
+    color = "Model",
+    title = "ETS vs ARIMA forecasts"
+  ) +
+  theme_minimal()
+```
+
+Accuracy on the training data:
+
+```{r accuracy}
+accuracy(fit_both)
+```
+
+
+Note that ARIMA is model-based while exponential smoothing is nonparametric (no data model assumed). If the data fit an ARIMA model, then forecasting with ARIMA will perform best. If not, then exponential smoothing will likely be more accurate.
+
+
+## And now for something completely different
+
+## Bootstrap
+
+### The idea
+
+Given a sample $x_1, \ldots, x_n$, the bootstrap constructs an approximate sampling distribution for any statistic by:
+
+1. Treating the sample as a stand-in for the population.
+2. Drawing many resamples **with replacement** of size $n$.
+3. Recomputing the statistic on each resample.
+
+The spread of those recomputed values estimates uncertainty.
+
+### Bootstrap a mean
+
+We use the `airquality` dataset (daily air quality measurements in New York, 1973).
+
+```{r airquality-look}
+# Quick look at the data
+summary(airquality$Ozone)
+```
+
+```{r bootstrap-mean}
+set.seed(123)
+
+x <- na.omit(airquality$Ozone)
+
+boot_means <- replicate(2000, {
+  x_star <- sample(x, size = length(x), replace = TRUE)
+  mean(x_star)
+})
+
+# 95% bootstrap confidence interval
+quantile(boot_means, c(0.025, 0.975))
+```
+
+Compare this to the classical t-interval:
+
+```{r t-interval}
+t.test(x)$conf.int
+```
+
+For a reasonably symmetric distribution, the two approaches agree closely.
+
+### Visualize the bootstrap distribution
+
+```{r bootstrap-plot}
+tibble(boot_mean = boot_means) |>
+  ggplot(aes(x = boot_mean)) +
+  geom_histogram(bins = 30, fill = "#1F4E79", color = "white") +
+  geom_vline(xintercept = quantile(boot_means, c(0.025, 0.975)),
+             linetype = "dashed", color = "#D95F02", linewidth = 1) +
+  labs(
+    x     = "Bootstrap sample mean (ppb)",
+    y     = "Count",
+    title = "Bootstrap sampling distribution of mean ozone",
+    subtitle = "Dashed lines: 95% bootstrap CI"
+  ) +
+  theme_minimal()
+```
+
+The bell shape of the bootstrap distribution reflects the central limit theorem at
+work — and we obtained it without any distributional assumptions.
+
+### Bootstrap a different statistic: the median
+
+The bootstrap shines when the analytical sampling distribution is hard to derive.
+
+```{r bootstrap-median}
+set.seed(42)
+
+boot_medians <- replicate(2000, {
+  x_star <- sample(x, size = length(x), replace = TRUE)
+  median(x_star)
+})
+
+quantile(boot_medians, c(0.025, 0.975))
+
+tibble(boot_median = boot_medians) |>
+  ggplot(aes(x = boot_median)) +
+  geom_histogram(bins = 25, fill = "#2ca02c", color = "white") +
+  geom_vline(xintercept = quantile(boot_medians, c(0.025, 0.975)),
+             linetype = "dashed", color = "#D95F02", linewidth = 1) +
+  labs(
+    x     = "Bootstrap sample median (ppb)",
+    y     = "Count",
+    title = "Bootstrap sampling distribution of median ozone",
+    subtitle = "Dashed lines: 95% bootstrap CI"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Local Linear Regression Smoothing (LOESS)
+
+### The idea
+
+Ordinary linear regression fits one global line. Local regression (LOESS / LOWESS) fits many small weighted regressions, one for each $x_0$:
+
+1. Give observations near $x_0$ high weight (using a kernel function).
+2. Fit a small weighted regression locally.
+3. Read off the predicted value at $x_0$.
+4. Move $x_0$ across the range of $x$ to trace out a smooth curve.
+
+The **span** (bandwidth) controls how wide the local neighborhood is — and therefore
+how smooth the resulting curve is.
+
+### LOESS in R with `mtcars`
+
+```{r loess-default}
+ggplot(mtcars, aes(x = wt, y = mpg)) +
+  geom_point(color = "gray40") +
+  geom_smooth(method = "loess", se = TRUE, color = "#1F4E79") +
+  labs(
+    x     = "Weight (1000 lbs)",
+    y     = "Miles per gallon",
+    title = "Local regression smoother (default span = 0.75)"
+  ) +
+  theme_minimal()
+```
+
+### Effect of the span (bandwidth)
+
+```{r loess-spans}
+spans <- c(0.2, 0.5, 0.75)
+
+span_df <- purrr::map_dfr(spans, function(s) {
+  fit <- loess(mpg ~ wt, data = mtcars, span = s)
+  tibble(
+    wt    = mtcars$wt,
+    mpg   = fitted(fit),
+    span  = paste0("span = ", s)
+  )
+})
+
+ggplot(mtcars, aes(x = wt, y = mpg)) +
+  geom_point(color = "gray50") +
+  geom_line(data = span_df,
+            aes(x = wt, y = mpg, color = span),
+            linewidth = 1) +
+  scale_color_manual(values = c("#D95F02", "#1F4E79", "#2ca02c")) +
+  labs(
+    x     = "Weight (1000 lbs)",
+    y     = "Miles per gallon",
+    color = "Bandwidth",
+    title = "LOESS curves with three different spans"
+  ) +
+  theme_minimal()
+```
+
+A small span (0.2) chases every point; a large span (0.75) is smoother but may miss real curvature. Use LOESS as an **exploratory** tool, not automatic proof of a relationship.
+
+---
+
+## Kernel Density Estimation
+
+### The idea
+
+A histogram estimates a distribution's shape, but the visual result depends heavily on the chosen bin width and starting edge. Kernel density estimation (KDE) places a smooth "bump" (kernel) at each observation and sums the bumps:
+
+$$\hat{f}(x) = \frac{1}{nh} \sum_{i=1}^{n} K\!\left(\frac{x - x_i}{h}\right)$$
+
+KDE is a **smooth version of a histogram**. The bandwidth $h$ plays the same role as bin width — it controls flexibility.
+
+| Bandwidth choice | Result |
+|---|---|
+| Too small | Too wiggly — chases individual points |
+| Reasonable | Reveals the true distribution shape |
+| Too large | Over-smoothed — washes out real features |
+
+### KDE in R: histogram + density overlay
+
+```{r kde-basic}
+ggplot(mtcars, aes(x = mpg)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 10, fill = "#1F4E79", color = "white", alpha = 0.6) +
+  geom_density(linewidth = 1, color = "#D95F02") +
+  labs(
+    x     = "Miles per gallon",
+    y     = "Density",
+    title = "Histogram plus kernel density estimate (mtcars)"
+  ) +
+  theme_minimal()
+```
+
+### Effect of bandwidth
+
+`density()` in base R lets you control bandwidth directly:
+
+```{r kde-bandwidth}
+x_vals  <- seq(min(mtcars$mpg) - 5, max(mtcars$mpg) + 5, length.out = 512)
+bws     <- c(1, 2.5, 6)
+
+kde_df <- purrr::map_dfr(bws, function(bw) {
+  d <- density(mtcars$mpg, bw = bw, n = 512)
+  tibble(x = d$x, y = d$y, bandwidth = paste0("bw = ", bw))
+})
+
+ggplot(kde_df, aes(x = x, y = y, color = bandwidth)) +
+  geom_line(linewidth = 1) +
+  scale_color_manual(values = c("#D95F02", "#1F4E79", "#2ca02c")) +
+  labs(
+    x     = "Miles per gallon",
+    y     = "Density",
+    color = "Bandwidth",
+    title = "KDE with three bandwidth choices"
+  ) +
+  theme_minimal()
+```
+
+The default bandwidth (`bw = "nrd0"`) is usually a good starting point, but always inspect the curve for over- or under-smoothing.
+
+### KDE for comparing groups
+
+```{r kde-groups}
+ggplot(mtcars, aes(x = mpg, fill = factor(cyl), color = factor(cyl))) +
+  geom_density(alpha = 0.3, linewidth = 1) +
+  scale_fill_manual(values  = c("#1F4E79", "#D95F02", "#2ca02c"),
+                    labels  = c("4 cyl", "6 cyl", "8 cyl")) +
+  scale_color_manual(values = c("#1F4E79", "#D95F02", "#2ca02c"),
+                     labels = c("4 cyl", "6 cyl", "8 cyl")) +
+  labs(
+    x     = "Miles per gallon",
+    y     = "Density",
+    fill  = "Cylinders",
+    color = "Cylinders",
+    title = "MPG distribution by number of cylinders"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Putting It All Together
+
+Work with the `aus_retail` dataset (monthly Australian retail turnover by industry).
+
+```{r activity-setup}
+# Pick a single series to keep things manageable
+cafe <- aus_retail |>
+  filter(
+    State            == "Victoria",
+    Industry         == "Cafes, restaurants and catering services"
+  )
+
+autoplot(cafe, Turnover) +
+  labs(
+    y     = "Turnover (AUD million)",
+    title = "Victorian cafes and restaurants: monthly turnover"
+  ) +
+  theme_minimal()
+```
+
+**Question 1 — What patterns do you see?**
+
+```{r activity-decompose}
+cafe |>
+  model(STL(Turnover ~ season(window = "periodic"))) |>
+  components() |>
+  autoplot() +
+  theme_minimal()
+```
+
+**Question 2 — Which forecast would you trust?**
+
+```{r activity-forecast}
+train <- cafe |> filter_index(. ~ "2016 Dec")
+test  <- cafe |> filter_index("2017 Jan" ~ .)
+
+fit <- train |>
+  model(
+    ETS   = ETS(Turnover),
+    ARIMA = ARIMA(Turnover),
+    Naive = SNAIVE(Turnover)    # seasonal naive as a benchmark
+  )
+
+fc <- fit |> forecast(h = nrow(test))
+
+fc |>
+  autoplot(cafe, level = NULL) +
+  autolayer(test, Turnover, color = "black", linewidth = 1) +
+  labs(
+    y     = "Turnover (AUD million)",
+    color = "Model",
+    title = "Three-model comparison with held-out 2017 test data"
+  ) +
+  theme_minimal()
+
+# Quantify accuracy on the test set
+fc |>
+  accuracy(test) |>
+  select(.model, RMSE, MAE, MAPE) |>
+  arrange(RMSE)
+```
+
+**Question 3 — How would you quantify uncertainty if this were not a time series?**
+
+```{r activity-bootstrap}
+# Bootstrap a confidence interval for the mean monthly turnover
+set.seed(2026)
+
+y <- pull(cafe, Turnover)
+
+boot_turnover <- replicate(2000, {
+  mean(sample(y, size = length(y), replace = TRUE))
+})
+
+cat("Bootstrap 95% CI for mean monthly turnover:\n")
+quantile(boot_turnover, c(0.025, 0.975))
+```
+
+```{r activity-kde}
+# KDE of monthly turnover values
+tibble(Turnover = y) |>
+  ggplot(aes(x = Turnover)) +
+  geom_histogram(aes(y = after_stat(density)),
+                 bins = 20, fill = "#1F4E79", color = "white", alpha = 0.6) +
+  geom_density(linewidth = 1, color = "#D95F02") +
+  labs(
+    x     = "Monthly turnover (AUD million)",
+    y     = "Density",
+    title = "Distribution of monthly turnover (Victorian cafes)"
+  ) +
+  theme_minimal()
+```
+
+---
+
+## Key Takeaways
+
+1. Time order matters — nearby observations are often related.
+2. Ordinary regression can be misleading for autocorrelated or trending data.
+3. Forecasting models should be evaluated on **held-out future data**.
+4. Start with simple benchmarks (seasonal naïve, mean).
+5. Try exponential smoothing — it handles trend and seasonality automatically.
+6. Treat ARIMA as a next step once you understand autocorrelation.
+7. Use bootstrap, LOESS, and KDE as general data-analysis tools regardless of whether the data are a time series.
+8. When data are a time series, there are versions of bootstrap that will preserve the sequential order of the series.
+
+---
+
+```{r session-info, echo=FALSE}
+sessionInfo()
+```
