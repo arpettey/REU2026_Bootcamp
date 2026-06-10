@@ -88,19 +88,7 @@ By the end of this session, you should be able to:
 Reference spirit: Hyndman and Athanasopoulos, \emph{Forecasting: Principles and Practice}, 3rd ed.
 \end{frame}
 
-\begin{frame}{The seven-step lesson plan}
-\begin{enumerate}
-  \item Why ordinary regression fails
-  \item What makes time series different?
-  \item Forecasting mindset
-  \item A forecasting competition
-  \item Simple forecasting methods
-  \item Introducing autoregression
-  \item Modern workflow checklist
-\end{enumerate}
-\end{frame}
-
-\section{1. Why ordinary regression fails}
+\section{1. Why ordinary regression often fails}
 
 \begin{frame}{Temperature Example}
 Suppose we record temperature every day.
@@ -204,7 +192,7 @@ But ordinary regression can still be badly misleading because:
 \end{itemize}
 \end{frame}
 
-\begin{frame}{Motivating example: temperature and CO$_2$}
+\begin{frame}{Strange Example: Temperature and CO$_2$}
 Suppose we regress global temperature anomaly on atmospheric CO$_2$ concentration:
 \[
   \text{Temperature}_t = \beta_0 + \beta_1\text{CO}_{2,t} + \varepsilon_t.
@@ -226,18 +214,17 @@ Code to download and analyze data is in R Markdown File
 \includegraphics[scale=.7]{climatePlots.pdf}
 \end{center}
 
-A naive regression will usually look impressive because both variables have strong time structure. A simple regression that ignores time can confuse trend, persistence, and causal association.
-
+The strong increase in $\text{CO}_2$ is very close to the trend in temperature. A linear regression will ``regress it out'', leaving almost white noise residuals.
 
 \end{frame}
 
-\begin{frame}{Always Check the Residuals!}
+\begin{frame}{White Noise Residuals}
 
 \begin{center}
 \includegraphics[scale=.7]{climateResids.pdf}
 \end{center}
 
-Both series trend upward over time. Because they share a common trend, a regression of temperature on $\text{CO}_2$ will look impressive on the surface 
+Because they share a common trend, but one series has a lot less noise than the other, a regression of temperature on $\text{CO}_2$ removes the trend, resulting in white noise residuals.
 
 \end{frame}
 

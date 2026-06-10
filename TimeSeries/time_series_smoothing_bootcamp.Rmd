@@ -156,7 +156,7 @@ The $R^2$ is high and the coefficient on CO₂ is highly significant. This looks
 ### Residual diagnostics: the autocorrelation problem
 
 ```{r climate-residuals}
-pdf(file="climateResids.pdf", height=3, width=5)
+#pdf(file="climateResids.pdf", height=3, width=5)
 par(mfrow = c(1, 2))
 
 plot(climate_df$year, residuals(fit_climate),
@@ -167,25 +167,63 @@ abline(h = 0, lty = 2, col = "gray50")
 
 acf(residuals(fit_climate),
     main = "ACF of OLS residuals")
-dev.off()
+#dev.off()
 par(mfrow = c(1, 1))
 ```
-
-**What to notice:**
-
-* The residual plot is not random noise — it has a clear wave-like structure indicating that consecutive residuals are related (positive autocorrelation).
-* The ACF confirms this: several lags are well outside the confidence bands.
-* This violates the OLS independence assumption, so standard errors and p-values are unreliable — even though the regression *appears* to fit well.
-
-### Why this matters 
+The Durbin-Watson statistic goes from 0 to 4. A value near 0 confirms strong positive correlation. A value near 4 indicates strong negative correlation. A value near 2 confirms no autocorrelation. Key takeaway: a high $R^2$ and a significant coefficient are not sufficient. You must inspect the residuals over time.
 
 ```{r climate-dwtest, message=FALSE}
 # A formal test for first-order autocorrelation in residuals
 library(lmtest)
 dwtest(fit_climate)
 ```
+**What I thought would happen:**
 
-The Durbin-Watson statistic near 0 (versus the null of 2) confirms strong positive autocorrelation. Key takeaway: a high $R^2$ and a significant coefficient are not sufficient. You must inspect the residuals over time.
+* The residual plot would indicate that consecutive residuals are related (positive autocorrelation).
+* The ACF would show several lags are well outside the confidence bands and a slowly decaying pattern.
+* Correlation among residuals violates the OLS independence assumption, so standard errors and p-values are unreliable even though the regression *appears* to fit well.
+
+**What actually happened ***
+
+* The residual plot does not have a recognizable pattern.
+* The ACF shows a spike at 0 and no other large spikes. This is indicate of white noise (indepedent residuals)
+* The DW statistic is near 2, but the p-value is small, indicating some presence of autocorrelation (we reject the null that the residuals are independent)
+
+
+
+### Why this matters 
+My plan was to show two series that are not correlated with each other but regressing one on the other results in correlated residuals. I chose poorly. My code produced these plots because the sheer strength of the accelerating $\text{CO}_{2}$ curve allowed a simple linear model to act as an unintended detrending mechanism. The model didn't fit the physics perfectly, but it removed enough of the shared trend to result in independent, white-noise errors.
+
+**Bottom Line:** Temperature and $\text{CO}_{2}$ are correlated in more ways than what is explained by time. 
+
+## Uncorrelated Random Walks
+These should be completely uncorrelated series. 
+
+```{r RandomWalk}
+n = 200
+x = cumsum(rnorm(n))
+y = cumsum(rnorm(n))
+time = 1:n
+
+plot(time, x, type = "l", ylim = range(c(x,y)), xlab = "Time", ylab = "Value")
+lines(time, y, lty = 2)
+legend("topleft", legend = c("x", "y"), lty = c(1,2), bty = "n")
+
+fit_rw = lm(y~x)
+summary(fit_rw)
+```
+
+```{r Random Walk Plots}
+par(mfrow=c(1,2))
+plot(residuals(fit_rw), type = "l")
+acf(residuals(fit_rw))
+par(mfrow=c(1,1))
+```
+Now the residuals show a pattern when plotted against time. There are clear ``waves'' in the residual plot. The ACF shows a slow decay over the lags. These plots are indicative of correlated residuals - but we know that these two series are uncorrelated (because I generated them to be so). Therefore, the only thing causing this correlation is the fact that they are both time series. 
+
+**Moral of the Story:** Be careful when using ordinary linear regression on time series data. Correlations that appear could be related only to the fact that the two series are gathered over time. 
+
+In general, we need a framework for showing relationships in time series that takes their unique features into account.
 
 ## Features of Time Series
 
@@ -285,6 +323,8 @@ A quick way to demonstrate that the white-noise panel has no structure is to che
 
 ```{r four-features-acf, fig.height=3.5}
 noise_ts |>
+#beer |>
+#  ACF(Beer) |>
   ACF(value) |>
   autoplot() +
   labs(
@@ -332,8 +372,22 @@ A naive approach is the historical average:
 
 $$\hat{y}_{t+1} = \frac{y_1 + y_2 + \cdots + y_t}{t}$$
 
-For temperature or many economic series, an observation from three years ago probably should not count as much as yesterday's. This motivates giving more weight to recent
-observations, which is the key idea behind exponential smoothing.
+For temperature or many economic series, an observation from three years ago probably should not count as much as yesterday's. This motivates giving more weight to recent observations, which is the key idea behind exponential smoothing.
+
+```{r benchmarks}
+fit_benchmarks <- train |> 
+  model(Mean = MEAN(Beer), Naive = NAIVE(Beer), Seasonal_naive = SNAIVE(Beer))
+
+fc_benchmarks <- fit_benchmarks |> forecast(h = nrow(test))
+
+fc_benchmarks |> autoplot(train, level = NULL) + 
+  autolayer(test, Beer) + 
+  labs(title = "Benchmark Forecasts")
+```
+
+```{r numericalMeasures}
+accuracy(fc_benchmarks, test)
+```
 
 ### Exponentially weighted averages
 
@@ -466,10 +520,11 @@ Exponential smoothing is a *family* of models. `ETS()` picks the right family me
 
 ```{r ets-manual, eval=FALSE}
 # Force additive Holt-Winters (trend + additive seasonality)
-beer |>
+beer_ets <- beer |>
   model(ETS(Beer ~ error("A") + trend("A") + season("A"))) |>
   report()
 ```
+
 
 ---
 
@@ -583,6 +638,10 @@ boot_means <- replicate(2000, {
 
 # 95% bootstrap confidence interval
 quantile(boot_means, c(0.025, 0.975))
+
+par(mfrow=c(1,2))
+hist(airquality$Ozone)
+hist(boot_means)
 ```
 
 Compare this to the classical t-interval:
